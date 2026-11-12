@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <title>Controle de Estoque</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 0 10px;
+        }
+
+        input,
+        select,
+        button {
+            padding: 8px;
+            margin: 4px 0;
+            font-size: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        #msg {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>📦 Controle de Estoque</h1>
+    <button id="btnCamera" onclick="alternarCamera()">📷 Abrir câmera</button>
+    <div id="leitor" style="width:100%; max-width:400px; margin-top:10px"></div>
+
+    <input id="codigo" placeholder="Código de barras">
+    <select id="tipo">
+        <option value="entrada">Entrada</option>
+        <option value="saida">Saída</option>
+    </select>
+    <input id="quantidade" type="number" value="1" min="1" style="width:70px">
+    <button onclick="movimentar()">Confirmar</button>
+
+    <div id="msg"></div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Código</th>
+                <th>Produto</th>
+                <th>Qtd</th>
+            </tr>
+        </thead>
+        <tbody id="lista"></tbody>
+    </table>
+
+    <script>
+        const msg = document.getElementById('msg');
+        let scanner = null;
+        let ocupado = false;
+
+        async function alternarCamera() {
+            const btn = document.getElementById('btnCamera');
+
+            if (scanner) {
+                await scanner.stop();
+                scanner = null;
+                btn.textContent = '📷 Abrir câmera';
+                return;
+            }
+
+            scanner = new Html5Qrcode('leitor', {
+                formatsToSupport: [
+                    Html5QrcodeSupportedFormats.EAN_13,
+                    Html5QrcodeSupportedFormats.EAN_8,
+                    Html5QrcodeSupportedFormats.UPC_A,
+                    Html5QrcodeSupportedFormats.UPC_E,
+                    Html5QrcodeSupportedFormats.CODE_128,
+                    Html5QrcodeSupportedFormats.CODE_39
+                ],
+                useBarCodeDetectorIfSupported: true
+            });
+
+            try {
+                await scanner.start(
+                    { facingMode: 'environment' },
+                    { fps: 10, qrbox: { width: 280, height: 140 } },
+                    codigoLido
+                );
+                btn.textContent = '⏹ Parar câmera';
+            } catch (e) {
+                scanner = null;
+                msg.textContent = '❌ Não consegui abrir a câmera (precisa estar em HTTPS e com permissão liberada)';
+            }
+        }
+
+        function codigoLido(texto) {
+            if (ocupado) return;
+            ocupado = true;
+
+            if (navigator.vibrate) navigator.vibrate(200);
+            document.getElementById('codigo').value = texto;
+            movimentar();
+
+            setTimeout(() => { ocupado = false; }, 2000);
+        }
+
+        async function carregar() {
+            const r = await fetch('/api/produtos');
+            const produtos = await r.json();
+            const lista = document.getElementById('lista');
+            lista.innerHTML = '';
+            for (const p of produtos) {
+                const tr = document.createElement('tr');
+                for (const valor of [p.codigo, p.nome, p.quantidade]) {
+                    const td = document.createElement('td');
+                    td.textContent = valor;
+                    tr.appendChild(td);
+                }
+                lista.appendChild(tr);
+            }
+        }
+
+        async function enviar(url, dados) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(dados)
+            });
+        }
+
+        async function movimentar() {
+            const codigo = document.getElementById('codigo').value.trim();
+            const tipo = document.getElementById('tipo').value;
+            const quantidade = parseInt(document.getElementById('quantidade').value);
+
+            if (!codigo) { msg.textContent = 'Informe o código'; return; }
+
+            let r = await enviar('/api/movimentar', { codigo, tipo, quantidade });
+
+            if (r.status === 404 && tipo === 'entrada') {
+                const nome = prompt('Produto novo! Qual o nome?');
+                if (!nome) return;
+                r = await enviar('/api/produtos', { codigo, nome, quantidade });
+            }
+
+            const dados = await r.json();
+            msg.textContent = r.ok ? '✅ Feito!' : '❌ ' + dados.erro;
+
+            document.getElementById('codigo').value = '';
+            carregar();
+        }
+
+        carregar();
+    </script>
+</body>
+
+</html>
